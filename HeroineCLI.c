@@ -1,10 +1,10 @@
-/*! @file GPMF_demo.c
+/*! @file HeroineCLI.c
  *
- *  @brief Demo to extract GPMF from an MP4
+ *  @brief Convert gopro MPç to GPX
  *
- *  @version 1.0.1
+ *  @version 0.2
  *
- *  (C) Copyright 2017 GoPro Inc (http://gopro.com/).
+ *  (C) Copyright 2017 OrbisTerrae
  *	
  *  Licensed under either:
  *  - Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0  
@@ -62,6 +62,7 @@ int main(int argc, char *argv[])
     double msec =0;
     int hour = 0;
     int fractpart, intpart;
+    float tempc = -273.15;
 
     time(&timer);
     tm_info = localtime(&timer);
@@ -75,36 +76,12 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-
 	metadatalength = OpenGPMFSource(argv[1]);
-
-	//metadatalength = OpenGPMFSourceUDTA(argv[1]);
 
 	if (metadatalength > 0.0)
 	{
 		uint32_t index, payloads = GetNumberGPMFPayloads();
 
-    /*
-     <?xml version="1.0" encoding="UTF-8" standalone="no" ?>
-     <gpx xmlns="http://www.topografix.com/GPX/1/1"
-     xmlns:gpxx="http://www.garmin.com/xmlschemas/GpxExtensions/v3"
-     xmlns:gpxtrkx="http://www.garmin.com/xmlschemas/TrackStatsExtension/v1"
-     xmlns:gpxtrkoffx="http://www.garmin.com/xmlschemas/TrackMovieOffsetExtension/v1"
-     xmlns:wptx1="http://www.garmin.com/xmlschemas/WaypointExtension/v1"
-     xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
-     xmlns:gpxpx="http://www.garmin.com/xmlschemas/PowerExtension/v1"
-     xmlns:gpxacc="http://www.garmin.com/xmlschemas/AccelerationExtension/v1"
-     creator="VIRB Elite"
-     version="1.1"
-     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-     <metadata>
-     <link href="https://sites.google.com/site/oterrae/">
-     <text>Orbis Terrae</text>
-     </link>
-     <time>2016-02-21T10:56:06Z</time>
-     </metadata>
-     <trk>
-     */
         printf("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\" ?>\n");
         printf("<gpx xmlns=\"http://www.topografix.com/GPX/1/1\"\n");
         printf("     xmlns:gpxx=\"http://www.garmin.com/xmlschemas/GpxExtensions/v3\"\n");
@@ -124,20 +101,6 @@ int main(int argc, char *argv[])
         printf("       <time>%s</time>\n",TimeStr);
         printf("     </metadata>\n");
         printf("<trk>\n");
-
-        /*
-         <name>DJI_0001.SRT.GPX</name>
-         <extensions>
-         <gpxx:TrackExtension>
-         <gpxx:DisplayColor>Cyan</gpxx:DisplayColor>
-         </gpxx:TrackExtension>
-         <gpxtrkoffx:TrackMovieOffsetExtension>
-         <gpxtrkoffx:StartOffsetSecs>0</gpxtrkoffx:StartOffsetSecs>
-         </gpxtrkoffx:TrackMovieOffsetExtension>
-         </extensions>
-         <trkseg>
-         */
-        
         printf("<name>%s</name>\n", argv[1]);
         printf("     <extensions>\n");
         printf("         <gpxx:TrackExtension>\n");
@@ -147,47 +110,10 @@ int main(int argc, char *argv[])
         printf("         <gpxtrkoffx:StartOffsetSecs>0</gpxtrkoffx:StartOffsetSecs>\n");
         printf("         </gpxtrkoffx:TrackMovieOffsetExtension>\n");
         printf("     </extensions>\n");
-//        printf("<!-- found %.2fs of metadata, from %d payloads, within %s-->\n", metadatalength, payloads, argv[1]);
-        printf("<trkseg>\n");
         
-        
-/*
-#if 1
-		if (payloads == 1) // Printf the contents of the single payload
-		{
-			uint32_t payloadsize = GetGPMFPayloadSize(0);
-			payload = GetGPMFPayload(payload, 0);
-			if(payload == NULL)
-				goto cleanup;
-
-			ret = GPMF_Init(ms, payload, payloadsize);
-			if (ret != GPMF_OK)
-				goto cleanup;
-
-			// Output (printf) all the contained GPMF data within this payload
-			ret = GPMF_Validate(ms, GPMF_RECURSE_LEVELS); // optional
-			if (GPMF_OK != ret)
-			{
-				printf("Invalid Structure\n");
-				goto cleanup;
-			}
-
-			GPMF_ResetState(ms);
-			do
-			{
-				PrintGPMF(ms);  // printf current GPMF KLV
-			} while (GPMF_OK == GPMF_Next(ms, GPMF_RECURSE_LEVELS));
-			GPMF_ResetState(ms);
-			printf("\n");
-
-		}
-#endif
-*/
-
 
 		for (index = 0; index < payloads; index++)
 		{
-#if 1
             // Find all the available Streams and compute they sample rates
             while (GPMF_OK == GPMF_FindNext(ms, GPMF_KEY_STREAM, GPMF_RECURSE_LEVELS))
             {
@@ -198,11 +124,9 @@ int main(int argc, char *argv[])
                     //printf("%c%c%c%c sampling rate = %f Hz\n", PRINTF_4CC(fourcc), rate);
                     if(fourcc == STR2FOURCC("GPS5")){
                         GPSrate = rate;
-                        //printf("<!-- Setting sampling rate for GPS5 to %f Hz-->\n", GPSrate);
                     }
                 }
             }
-#endif
             
 			uint32_t payloadsize = GetGPMFPayloadSize(index);
 			double in = 0.0, out = 0.0; //times
@@ -218,7 +142,7 @@ int main(int argc, char *argv[])
 			if (ret != GPMF_OK)
 				goto cleanup;
 
-#if 1		// Find all the available Streams and the data carrying FourCC
+		// Find all the available Streams and the data carrying FourCC
 			if (index == 0) // show first payload 
 			{
 				while (GPMF_OK == GPMF_FindNext(ms, GPMF_KEY_STREAM, GPMF_RECURSE_LEVELS))
@@ -233,7 +157,7 @@ int main(int argc, char *argv[])
 
 						if (samples)
 						{
-							//printf("  STRM of %c%c%c%c ", PRINTF_4CC(key));
+							printf("<!-- STRM of %c%c%c%c found -->\n", PRINTF_4CC(key));
 
 							if (type == GPMF_TYPE_COMPLEX)
 							{
@@ -259,31 +183,23 @@ int main(int argc, char *argv[])
 							{
 								//printf("of type %c ", type);
 							}
-/*
-							printf("with %d sample%s ", samples, samples > 1 ? "s" : "");
-
-							if (elements > 1)
-								printf("-- %d elements per sample", elements);
-
-							printf("\n");
- */
-                            
 						}
 					}
 				}
 				GPMF_ResetState(ms);
 				printf("\n");
 			}
-#endif 
 
 
+            printf("<trkseg>\n");
 
+	// Find GPS values and return scaled doubles.
 
-#if 1		// Find GPS values and return scaled doubles. 
-
+            
             printf("<!-- frame %d -->\n", index);
             if (GPMF_OK == GPMF_FindNext(ms, STR2FOURCC("GPS5"), GPMF_RECURSE_LEVELS) || //GoPro Hero5 GPS
-					GPMF_OK == GPMF_FindNext(ms, STR2FOURCC("GPRI"), GPMF_RECURSE_LEVELS))   //GoPro Karma GPS
+                GPMF_OK == GPMF_FindNext(ms, STR2FOURCC("GPRI"), GPMF_RECURSE_LEVELS) || //GoPro Karma
+                GPMF_OK == GPMF_FindNext(ms, STR2FOURCC("TMPC"), GPMF_RECURSE_LEVELS))   //GoPro temp
 				{
 					uint32_t key = GPMF_Key(ms);
 					uint32_t samples = GPMF_Repeat(ms);
@@ -320,51 +236,68 @@ int main(int argc, char *argv[])
 
 						//GPMF_FormattedData(ms, tmpbuffer, buffersize, 0, samples); // Output data in LittleEnd, but no scale
 						GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples, GPMF_TYPE_DOUBLE);  //Output scaled data as floats
-
+                        
+                       
 						ptr = tmpbuffer;
-/*
-                        printf("HOME(%.3f, %.3f) 2018.01.01 15:15:15\n",ptr[0],ptr[1]);
-                        printf("GPS(%.3f, %.3f, %.0f) BAROMETER: %.1f\n",ptr[0],ptr[1],ptr[2],ptr[2]);
-                        printf("ISO:478 Shutter:30 EV: 0 Fnum:F2.8 \n");
-                        printf("\n");
-  */
-    /* There are 18 samples (18.177936Hz) per 1s data - we print only the first - good enought for STR, not for GPX
-    GPS5 33.126deg, -117.327deg, -21.144m, 1.671m/s, 1.660m/s,
-     */
+                        if(key == STR2FOURCC("TMPC")){
+                            printf ("<!--     TMPC Temperature detected  ------------------------------------------------------------------------- -->\n");
+                            tempc = ptr[0];
+                            //not tested, likely to break
+                        }
+
+                        /* There are 18 samples (18.177936Hz) per 1s data     */
                         strftime(TimeStr, 26, "%Y-%m-%dT", tm_info);
-                        // must be in the following format:  <time>2017-12-19T18:22:01.001Z</time>
+                        // Time must be in the following format:  <time>2017-12-19T18:22:01.001Z</time>
                         
+                        // first sample of the 1 second with extension - potentially
+                        printf("  <trkpt lat=\"%.14f\" lon=\"%.14f\">\n", ptr[0],ptr[1]);
+                        printf("    <ele>%f</ele>\n", ptr[2]);
+                        //printf("    <2DSpeed>%f</2dSpeed>\n", ptr[3]);
+                        //printf("    <3DSpeed>%f</3dSpeed>\n", ptr[4]);
+                        msec = (in)*1000;
+                        sec = (int) (msec / 1000) % 60;
+                        min = (int) ((int)(msec / (1000*60)) % 60);
+                        hour = (int) ((int)(msec / (1000*60*60)) % 24);
+                        double2Ints(msec/1000, 3, &intpart, &fractpart);
                         
-						for (i = 0; i < samples; i++)
+                        printf("    <time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
+                        if(tempc >= -273){
+                            printf("   <extensions>\n");
+                            printf("    <gpxtpx:TrackPointExtension>\n");
+                            printf("         <gpxtpx:atemp>%f</gpxtpx:atemp>\n",tempc);
+                            printf("         <gpxtpx:hr>%d</gpxtpx:hr>\n",75);
+                            printf("     </gpxtpx:TrackPointExtension>\n");
+                            printf("   </extensions>\n");
+                        }
+                        printf("  </trkpt>\n");
+                        
+                        //following 17 samples without extension
+						for (i = 1; i < samples; i++)
 						{
-							//printf("%c%c%c%c ", PRINTF_4CC(key));
-                            /*
-                             <trkpt lat="45.751900000000000" lon="6.280200000000000">
-                            <ele>6.8</ele>
-                            <time>2016-02-26T18:08:37Z</time>
-                            </trkpt>
-                             */
+                            printf("<-- %c%c%c%c lat:%.2f lon:%.2f alt:%.2f 2DS:%.2f 3DS:%.2f -->\n", PRINTF_4CC(key),ptr[0],ptr[1],ptr[2],ptr[3],ptr[4]);
                             printf("  <trkpt lat=\"%.14f\" lon=\"%.14f\">\n", ptr[0],ptr[1]);
                             printf("    <ele>%f</ele>\n", ptr[2]);
+                            //printf("    <2DSpeed>%f</2dSpeed>\n", ptr[3]);
+                            //printf("    <3DSpeed>%f</3dSpeed>\n", ptr[4]);
                             
-                            // to check if months and days are always using a leading 0.
                             msec = (in + (i/GPSrate))*1000;
                             sec = (int) (msec / 1000) % 60;
                             min = (int) ((int)(msec / (1000*60)) % 60);
                             hour = (int) ((int)(msec / (1000*60*60)) % 24);
                             double2Ints(msec/1000, 3, &intpart, &fractpart);
-                            
-                            //printf("time:%s - hour:%d - min:%d - sec:%d - ms:%d - int:%d - fract:%d\n", TimeStr, hour, min, sec, fractpart, intpart, fractpart);
-                            printf("<time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
+                            printf("    <time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
                             printf("  </trkpt>\n");
+                            
 						}
+                
+                        
 						free(tmpbuffer);
 					}
 				}
 				GPMF_ResetState(ms);
 				printf("\n");
 
-#endif
+
 		}
         /*
         </trkseg>
