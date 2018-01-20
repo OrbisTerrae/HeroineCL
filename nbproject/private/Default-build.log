@@ -1,0 +1,5 @@
+gcc -c HeroineCLI.c
+gcc -c GPMF_parser.c
+gcc -c GPMF_mp4reader.c
+gcc -c GPMF_print.c
+gcc -o HeroineCLI HeroineCLI.o GPMF_parser.o GPMF_mp4reader.o GPMF_print.o

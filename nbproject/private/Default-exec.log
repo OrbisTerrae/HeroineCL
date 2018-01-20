@@ -1,0 +1,34 @@
+called: /usr/bin/gcc
+	/Users/gbourell/Dropbox/private/git/HeroineCL
+	/usr/bin/gcc
+	-c
+	HeroineCLI.c
+
+called: /usr/bin/gcc
+	/Users/gbourell/Dropbox/private/git/HeroineCL
+	/usr/bin/gcc
+	-c
+	GPMF_parser.c
+
+called: /usr/bin/gcc
+	/Users/gbourell/Dropbox/private/git/HeroineCL
+	/usr/bin/gcc
+	-c
+	GPMF_mp4reader.c
+
+called: /usr/bin/gcc
+	/Users/gbourell/Dropbox/private/git/HeroineCL
+	/usr/bin/gcc
+	-c
+	GPMF_print.c
+
+called: /usr/bin/gcc
+	/Users/gbourell/Dropbox/private/git/HeroineCL
+	/usr/bin/gcc
+	-o
+	HeroineCLI
+	HeroineCLI.o
+	GPMF_parser.o
+	GPMF_mp4reader.o
+	GPMF_print.o
+
