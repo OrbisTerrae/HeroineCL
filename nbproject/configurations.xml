@@ -14,6 +14,7 @@
       <itemPath>nbproject/private/launcher.properties</itemPath>
       <itemPath>makefile</itemPath>
     </logicalFolder>
+    <itemPath>notebook.txt</itemPath>
   </logicalFolder>
   <sourceFolderFilter>^(nbproject)$</sourceFolderFilter>
   <sourceRootList>
@@ -48,6 +49,8 @@
       <item path="GPMF_print.c" ex="false" tool="0" flavor2="0">
       </item>
       <item path="HeroineCLI.c" ex="false" tool="0" flavor2="0">
+      </item>
+      <item path="notebook.txt" ex="false" tool="3" flavor2="0">
       </item>
     </conf>
   </confs>

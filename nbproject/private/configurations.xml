@@ -9,6 +9,7 @@
       <in>GPMF_print.c</in>
       <in>HeroineCLI.c</in>
     </df>
+    <itemPath>notebook.txt</itemPath>
   </logicalFolder>
   <projectmakefile>makefile</projectmakefile>
   <confs>

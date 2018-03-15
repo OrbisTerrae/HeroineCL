@@ -1,0 +1,42 @@
+https://github.com/hypoxic/GoProInfo
+
+
+
+https://superuser.com/questions/881661/how-where-does-a-gopro-camera-store-hilight-tags
+
+I’ve found the HiLight tags: they are stored in the MP4 files themselves.
+In particular, the tags are stored in a box with type HMMT in the User Data Box (udta) of the Movie Box (moov) of the MPEG-4 container. See ISO/IEC 14496-12 for details on these “boxes”.
+The HMMT box seems to be a non-standard (GoPro-specific) ISO/IEC 14496-12 box. Its data consists of one or more 32-bit integers. The first integer contains the number of available HiLight tags. All subsequent integers resemble an ordered list of HiLight tags. Each HiLight tag is represented as a millisecond value.
+
+
+
+
+
+Here is some sample code to find these markers, with the PHP Reader library (https://code.google.com/p/php-reader/wiki/ISO14496).
+
+require_once 'Zend/Media/Iso14496.php'; 
+$isom = new Zend_Media_Iso14496($file);
+
+$hmmt = $isom->moov->udta->HMMT;
+if ( isset($hmmt)) {
+    $reader = $hmmt->getReader();
+    $reader->setOffset($hmmt->getOffset());
+
+    $reader->readHHex(4);//skip some bytes 
+    $reader->readHHex(4);//skip some bytes    
+
+    $n = $reader->readInt32BE(); //number of points
+
+    for ($i = 1; $i <= $n; $i++) {
+        $t = $reader->readInt32BE();
+        print_r($t); // marker in ms
+        echo "\n";
+    }
+}
+
+The getReader() is a function not implemented unfortunately, I hacked it into Zend/Media/Iso14496/Box.php
+public function getReader() {
+    return $this->_reader;
+}
+
+If you want to do it in java, this library is probably helpfull (it helped me looking into the file in detail) https://github.com/sannies/isoviewer

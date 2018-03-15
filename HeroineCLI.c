@@ -27,9 +27,15 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <math.h>
+#include <libgen.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #include "GPMF_parser.h"
 #include "GPMF_mp4reader.h"
+
+#define VERSION "0.3"
+
 
 #define INIT_TEMP -273 // should be set to -273 to prevent Temp end HR - to be passed as a cmd line argument
 #define HR_BASE 65
@@ -53,6 +59,7 @@ void double2Ints(double f, int p, int *i, int *d)
     *d = (int) ((f-li)*prec);  // get decimal part
     *i = li;
 }
+
 char* concat(const char *s1, const char *s2)
 {
     char *result = malloc(strlen(s1)+strlen(s2)+1);//+1 for the null-terminator
@@ -61,6 +68,7 @@ char* concat(const char *s1, const char *s2)
     strcat(result, s2);
     return result;
 }
+
 int main(int argc, char *argv[])
 {
     int32_t ret = GPMF_OK;
@@ -71,7 +79,8 @@ int main(int argc, char *argv[])
     struct tm* tm_info;
     double GPSrate = 18.177936;
     char TimeStr[26];
-    char* f_output=NULL;
+    char* f_output_GPX=NULL;
+    char* f_output_KML=NULL;
     char* f_input;
     int verbose = 0;
     int min =0;
@@ -83,10 +92,13 @@ int main(int argc, char *argv[])
     int hr = HR_BASE;
     int AltInit = 0;
     int c;
-    FILE *fp = NULL;
-    char* version = "0.2";
+    FILE *fp_GPX = NULL;
+    FILE *fp_KML = NULL;
+    char* version = VERSION;
     int init_temp = INIT_TEMP;
     int hr_base = HR_BASE;
+    char* basec;
+    struct stat st;
     
     while ((c = getopt (argc, argv, "vht:r:o:")) != -1)
      switch (c)
@@ -101,7 +113,8 @@ int main(int argc, char *argv[])
          hr_base = atoi(optarg);
          break;
        case 'o':
-         f_output = optarg;
+         f_output_GPX = optarg;
+         f_output_KML = optarg;
          break;
        case 'h':
          fprintf (stderr, "Usage: %s [-h] [-v] [-t Temperature] [-r HearRate] [-o Output] GOPRO_WITH_GPMF.MP4\n", argv[0]);
@@ -128,9 +141,21 @@ int main(int argc, char *argv[])
          return 1;
     }
 
-    time(&timer);
-    tm_info = localtime(&timer);
-
+//    time(&timer);
+//    tm_info = localtime(&timer);
+    
+    
+    if( stat(f_input, &st) != 0 )
+        perror("stat failed");
+#ifdef _DARWIN_FEATURE_64_BIT_INODE
+    tm_info = localtime(&st.st_birthtimespec); 
+#else
+    tm_info = localtime(&st.st_ctime);
+#endif
+    
+    if(verbose) 
+        printf("File time and date: %s", asctime(tm_info));
+    
     strftime(TimeStr, 26, "%Y-%m-%dT%H:%M:%SZ", tm_info);
 
     metadatalength = OpenGPMFSource(f_input);
@@ -138,47 +163,109 @@ int main(int argc, char *argv[])
     if (metadatalength > 0.0) {
         if (verbose) printf("Orbis Terrae %s %s\n", argv[0], version);
         uint32_t index, payloads = GetNumberGPMFPayloads();
-        if (f_output == NULL) {
-            if (verbose) printf("no file output mentioned, using %s.GPX\n", f_input);
-            f_output = concat(f_input, ".GPX");
+        if (f_output_GPX == NULL) {
+            if (verbose) printf("no file output mentioned, using %s.GPX %s.KML\n", f_input, f_input);
+            f_output_GPX = concat(f_input, ".GPX");
+            f_output_KML = concat(f_input, ".KML");
         }
-        fp = fopen(f_output, "w");
-        if (fp) {
+        else{
+            f_output_GPX = concat(f_output_GPX, ".GPX");
+            f_output_KML = concat(f_output_KML, ".KML");
+        }
+        fp_GPX = fopen(f_output_GPX, "w");
+        if (fp_GPX) {
             //fprintf (stderr, "%s opened\n", f_output); 
         } else {
-            fprintf(stderr, "ERROR: %s not opened\n", f_output);
+            fprintf(stderr, "ERROR: %s not opened\n", f_output_GPX);
+            return -1;
+        }
+        
+        fp_KML = fopen(f_output_KML, "w");
+        if (fp_KML) {
+            //fprintf (stderr, "%s opened\n", f_output); 
+        } else {
+            fprintf(stderr, "ERROR: %s not opened\n", f_output_KML);
             return -1;
         }
 
-        fprintf(fp, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\" ?>\n");
-        fprintf(fp, "<gpx xmlns=\"http://www.topografix.com/GPX/1/1\"\n");
-        fprintf(fp, "     xmlns:gpxx=\"http://www.garmin.com/xmlschemas/GpxExtensions/v3\"\n");
-        fprintf(fp, "     xmlns:gpxtrkx=\"http://www.garmin.com/xmlschemas/TrackStatsExtension/v1\"\n");
-        fprintf(fp, "     xmlns:gpxtrkoffx=\"http://www.garmin.com/xmlschemas/TrackMovieOffsetExtension/v1\"\n");
-        fprintf(fp, "     xmlns:wptx1=\"http://www.garmin.com/xmlschemas/WaypointExtension/v1\"\n");
-        fprintf(fp, "     xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v1\"\n");
-        fprintf(fp, "     xmlns:gpxpx=\"http://www.garmin.com/xmlschemas/PowerExtension/v1\"\n");
-        fprintf(fp, "     xmlns:gpxacc=\"http://www.garmin.com/xmlschemas/AccelerationExtension/v1\"\n");
-        fprintf(fp, "     creator=\"VIRB Elite\"\n");
-        fprintf(fp, "     version=\"1.1\"\n");
-        fprintf(fp, "     xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n");
-        fprintf(fp, "     <metadata>\n");
-        fprintf(fp, "       <link href=\"https://sites.google.com/site/oterrae/\">\n");
-        fprintf(fp, "          <text>Orbis Terrae</text>\n");
-        fprintf(fp, "       </link>\n");
-        fprintf(fp, "       <time>%s</time>\n", TimeStr);
-        fprintf(fp, "     </metadata>\n");
-        fprintf(fp, "<trk>\n");
-        fprintf(fp, "  <name>%s</name>\n", f_input);
-        fprintf(fp, "       <extensions>\n");
-        fprintf(fp, "           <gpxx:TrackExtension>\n");
-        fprintf(fp, "              <gpxx:DisplayColor>Cyan</gpxx:DisplayColor>\n");
-        fprintf(fp, "           </gpxx:TrackExtension>\n");
-        fprintf(fp, "           <gpxtrkoffx:TrackMovieOffsetExtension>\n");
-        fprintf(fp, "              <gpxtrkoffx:StartOffsetSecs>0</gpxtrkoffx:StartOffsetSecs>\n");
-        fprintf(fp, "           </gpxtrkoffx:TrackMovieOffsetExtension>\n");
-        fprintf(fp, "       </extensions>\n");
-        fprintf(fp, "  <trkseg>\n");
+        basec = basename(f_input);
+                   
+        fprintf(fp_GPX, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\" ?>\n");
+        fprintf(fp_GPX, "<gpx xmlns=\"http://www.topografix.com/GPX/1/1\"\n");
+        fprintf(fp_GPX, "     xmlns:gpxx=\"http://www.garmin.com/xmlschemas/GpxExtensions/v3\"\n");
+        fprintf(fp_GPX, "     xmlns:gpxtrkx=\"http://www.garmin.com/xmlschemas/TrackStatsExtension/v1\"\n");
+        fprintf(fp_GPX, "     xmlns:gpxtrkoffx=\"http://www.garmin.com/xmlschemas/TrackMovieOffsetExtension/v1\"\n");
+        fprintf(fp_GPX, "     xmlns:wptx1=\"http://www.garmin.com/xmlschemas/WaypointExtension/v1\"\n");
+        fprintf(fp_GPX, "     xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v1\"\n");
+        fprintf(fp_GPX, "     xmlns:gpxpx=\"http://www.garmin.com/xmlschemas/PowerExtension/v1\"\n");
+        fprintf(fp_GPX, "     xmlns:gpxacc=\"http://www.garmin.com/xmlschemas/AccelerationExtension/v1\"\n");
+        fprintf(fp_GPX, "     creator=\"VIRB Elite\"\n");
+        fprintf(fp_GPX, "     version=\"1.1\"\n");
+        fprintf(fp_GPX, "     xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n");
+        fprintf(fp_GPX, "     <metadata>\n");
+        fprintf(fp_GPX, "       <link href=\"https://sites.google.com/site/oterrae/\">\n");
+        fprintf(fp_GPX, "          <text>Orbis Terrae</text>\n");
+        fprintf(fp_GPX, "       </link>\n");
+        fprintf(fp_GPX, "       <time>%s</time>\n", TimeStr);
+        fprintf(fp_GPX, "     </metadata>\n");
+        fprintf(fp_GPX, "<trk>\n");
+        fprintf(fp_GPX, "  <name>%s</name>\n", basec);
+        fprintf(fp_GPX, "       <extensions>\n");
+        fprintf(fp_GPX, "           <gpxx:TrackExtension>\n");
+        fprintf(fp_GPX, "              <gpxx:DisplayColor>Cyan</gpxx:DisplayColor>\n");
+        fprintf(fp_GPX, "           </gpxx:TrackExtension>\n");
+        fprintf(fp_GPX, "           <gpxtrkoffx:TrackMovieOffsetExtension>\n");
+        fprintf(fp_GPX, "              <gpxtrkoffx:StartOffsetSecs>0</gpxtrkoffx:StartOffsetSecs>\n");
+        fprintf(fp_GPX, "           </gpxtrkoffx:TrackMovieOffsetExtension>\n");
+        fprintf(fp_GPX, "       </extensions>\n");
+        fprintf(fp_GPX, "  <trkseg>\n");
+        
+        strftime(TimeStr, 26, "%d-%m-%Y %H:%M:%S", tm_info);
+        fprintf(fp_KML, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        fprintf(fp_KML, "<kml  xmlns=\"http://earth.google.com/kml/2.2\" xmlns:gx=\"http://www.google.com/kml/ext/2.2\" xmlns:trails=\"http://www.google.com/kml/trails/1.0\">\n");
+        fprintf(fp_KML, " <Document>\n");
+        fprintf(fp_KML, "  <name>HeroineGPS %s</name>\n", basec);
+        fprintf(fp_KML, "  <Placemark>\n");
+        fprintf(fp_KML, "   <name>%s %s</name>\n",argv[0],TimeStr);
+        fprintf(fp_KML, "    <Style id=\"OrbisTerrae\">\n");
+        fprintf(fp_KML, "        <BalloonStyle>\n");
+        fprintf(fp_KML, "        <bgColor>DF8DB2D8</bgColor>\n");
+        fprintf(fp_KML, "        <textColor>FF134E96</textColor>\n");
+        fprintf(fp_KML, "        <text>File: %s<br/>", basec);
+        fprintf(fp_KML, "              Date: %2d-%2d-%d<br/>", tm_info->tm_mday, tm_info->tm_mon+1,tm_info->tm_year+1900);
+        if(tempc >= -150){
+            fprintf(fp_KML, "Temp: %f°C<br/>",tempc);
+        }
+        fprintf(fp_KML, "              https://sites.google.com/site/oterrae/<br/>");
+        fprintf(fp_KML, "              %s v%s<br/>", argv[0],version); 
+        fprintf(fp_KML, "              Copyright © 2017-%d Orbis Terrae<br/>",tm_info->tm_year+1900);
+        fprintf(fp_KML, "              All rights reserved.</text>\n");
+        fprintf(fp_KML, "        </BalloonStyle>\n");
+        
+        fprintf(fp_KML, "     <LineStyle>\n");
+        fprintf(fp_KML, "      <color>DF8DB2D8</color>\n"); 
+        fprintf(fp_KML, "      <width>5</width>\n");
+        fprintf(fp_KML, "     </LineStyle>\n");
+        fprintf(fp_KML, "     <PolyStyle>\n");
+        fprintf(fp_KML, "        <color>0f00ff00</color>\n");
+        fprintf(fp_KML, "     </PolyStyle>\n");
+        fprintf(fp_KML, "    <LabelStyle>\n");
+        fprintf(fp_KML, "        <color>EF134E96</color>\n");
+        fprintf(fp_KML, "     </LabelStyle>\n");
+        fprintf(fp_KML, "     <IconStyle>\n");
+        fprintf(fp_KML, "        <color>EF134E96</color>\n");
+        fprintf(fp_KML, "        <scale>1</scale>\n");
+        fprintf(fp_KML, "        <Icon>\n");
+        fprintf(fp_KML, "          <href>http://maps.google.com/mapfiles/kml/shapes/arrow.png</href>\n");
+        fprintf(fp_KML, "        </Icon>\n");
+        fprintf(fp_KML, "      </IconStyle>\n");
+        fprintf(fp_KML, "    </Style>\n");
+        fprintf(fp_KML, "    <MultiGeometry>\n");
+        fprintf(fp_KML, "     <styleUrl>#OrbisTerrae</styleUrl>\n");
+        fprintf(fp_KML, "     <visibility>1</visibility>\n");
+        
+        
+        
 
         for (index = 0; index < payloads; index++) {
             // Find all the available Streams and compute they sample rates
@@ -248,10 +335,10 @@ int main(int argc, char *argv[])
                     }
                 }
                 GPMF_ResetState(ms);
-                fprintf(fp, "\n");
+                fprintf(fp_GPX, "\n");
             }
 
-            fprintf(fp, "<!--                                frame %09D                          -->\n", index);
+            fprintf(fp_GPX, "<!--                                frame %09D                          -->\n", index);
             if (verbose) printf("%06ds ", index);
 
 
@@ -304,46 +391,58 @@ int main(int argc, char *argv[])
                     // Time must be in the following format:  <time>2017-12-19T18:22:01.001Z</time>
 
                     // first sample of the 1 second with extension - potentially
-                    fprintf(fp, "    <trkpt lat=\"%.14f\" lon=\"%.14f\">\n", ptr[0], ptr[1]);
-                    fprintf(fp, "        <ele>%.2f</ele>\n", ptr[2]);
+                    fprintf(fp_GPX, "    <trkpt lat=\"%.14f\" lon=\"%.14f\">\n", ptr[0], ptr[1]);
+                    fprintf(fp_GPX, "        <ele>%.2f</ele>\n", ptr[2]);
 
                     tempc = init_temp - ((ptr[2] - AltInit) / 100) + ((rand() % 10) / 10) ;
                     hr = hr_base + sin(index * PI / 180) * 10 + rand() % 5;
-
-                    msec = (in)*1000;
-                    sec = (int) (msec / 1000) % 60;
+                    
+                    msec = (in)*1000 + tm_info->tm_sec *1000+ tm_info->tm_min *60*1000 + tm_info->tm_hour*60*60*1000;
+                    sec = (int) ((msec / 1000)) % 60;
                     min = (int) ((int) (msec / (1000 * 60)) % 60);
                     hour = (int) ((int) (msec / (1000 * 60 * 60)) % 24);
                     double2Ints(msec / 1000, 3, &intpart, &fractpart);
 
-                    fprintf(fp, "        <time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
+                    fprintf(fp_GPX, "        <time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
 
                     if (tempc >= -150) {
-                        fprintf(fp, "     <extensions>\n");
-                        fprintf(fp, "      <gpxtpx:TrackPointExtension>\n");
-                        fprintf(fp, "           <gpxtpx:atemp>%.2f</gpxtpx:atemp>\n", tempc);
-                        fprintf(fp, "           <gpxtpx:hr>%d</gpxtpx:hr>\n", hr);
-                        fprintf(fp, "       </gpxtpx:TrackPointExtension>\n");
-                        fprintf(fp, "     </extensions>\n");
+                        fprintf(fp_GPX, "     <extensions>\n");
+                        fprintf(fp_GPX, "      <gpxtpx:TrackPointExtension>\n");
+                        fprintf(fp_GPX, "           <gpxtpx:atemp>%.2f</gpxtpx:atemp>\n", tempc);
+                        fprintf(fp_GPX, "           <gpxtpx:hr>%d</gpxtpx:hr>\n", hr);
+                        fprintf(fp_GPX, "       </gpxtpx:TrackPointExtension>\n");
+                        fprintf(fp_GPX, "     </extensions>\n");
                         if (verbose) printf("Lat: %.14f - Long:%.14f - Alt:%.2fm (Temp:%.2f° - HR:%d)\n", ptr[0], ptr[1], ptr[2], tempc, hr);
                     }else{
                         if (verbose) printf("Lat: %.14f - Long:%.14f - Alt:%.2fm\n", ptr[0], ptr[1], ptr[2]);
+                    }                    
+                    fprintf(fp_GPX, "    </trkpt>\n");
+                    
+                    if(index == 0){
+                        fprintf(fp_KML,"     <Point><coordinates>%.14f,%.14f,%.14f</coordinates></Point>\n",ptr[1],ptr[0],ptr[2]); 
+                        fprintf(fp_KML,"     <LineString>\n");
+                        fprintf(fp_KML,"      <tessellate>1</tessellate>\n");
+                        fprintf(fp_KML,"      <altitudeMode>clampToGround</altitudeMode>\n");
+                        fprintf(fp_KML,"       <coordinates>\n");
+                    }
+                    else
+                    {
+                        fprintf(fp_KML,"%.14f,%.14f,%.14f ",ptr[1],ptr[0],ptr[2]); 
                     }
                     
-                    fprintf(fp, "    </trkpt>\n");
 
                     //following 17 samples without extension
                     for (i = 1; i < samples; i++) {
-                        fprintf(fp, "<!-- %c%c%c%c lat:%.2f lon:%.2f alt:%.2f 2DS:%.2f 3DS:%.2f -->\n", PRINTF_4CC(key), ptr[0], ptr[1], ptr[2], ptr[3], ptr[4]);
-                        fprintf(fp, "    <trkpt lat=\"%.14f\" lon=\"%.14f\">\n", ptr[0], ptr[1]);
-                        fprintf(fp, "      <ele>%.02f</ele>\n", ptr[2]);
+                        fprintf(fp_GPX, "<!-- %c%c%c%c lat:%.2f lon:%.2f alt:%.2f 2DS:%.2f 3DS:%.2f -->\n", PRINTF_4CC(key), ptr[0], ptr[1], ptr[2], ptr[3], ptr[4]);
+                        fprintf(fp_GPX, "    <trkpt lat=\"%.14f\" lon=\"%.14f\">\n", ptr[0], ptr[1]);
+                        fprintf(fp_GPX, "      <ele>%.02f</ele>\n", ptr[2]);
 
-                        msec = (in + (i / GPSrate))*1000;
+                        msec = (in + (i / GPSrate))*1000 + tm_info->tm_sec *1000+ tm_info->tm_min *60*1000 + tm_info->tm_hour*60*60*1000;
                         sec = (int) (msec / 1000) % 60;
                         min = (int) ((int) (msec / (1000 * 60)) % 60);
                         hour = (int) ((int) (msec / (1000 * 60 * 60)) % 24);
                         double2Ints(msec / 1000, 3, &intpart, &fractpart);
-                        fprintf(fp, "      <time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
+                        fprintf(fp_GPX, "      <time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
                         /*
                          if (tempc >= -150) {
                         fprintf(fp, "     <extensions>\n");
@@ -354,7 +453,7 @@ int main(int argc, char *argv[])
                         fprintf(fp, "     </extensions>\n");
                        }
                         */
-                      fprintf(fp, "    </trkpt>\n");
+                      fprintf(fp_GPX, "    </trkpt>\n");
 
                     }
 
@@ -363,24 +462,35 @@ int main(int argc, char *argv[])
                 }
             }
             GPMF_ResetState(ms);
-            fprintf(fp, "\n");
+            fprintf(fp_GPX, "\n");
 
 
         }
 
-        fprintf(fp, "    </trkseg>\n"
+        fprintf(fp_GPX, "    </trkseg>\n"
                 "  </trk>\n"
                 "</gpx>\n");
-
-
-        fclose(fp);
-        if (verbose) printf("%ds written to %s\n", index, f_output);
+        
+        fprintf(fp_KML,     
+                    "       </coordinates>\n"
+                    "      </LineString>\n"
+                    "     </MultiGeometry>\n"
+                    "   </Placemark>\n"
+                    " </Document>\n"
+                    "</kml>");
+        
+        fclose(fp_GPX);
+        fclose(fp_KML);
+        if (verbose) printf("%ds written to %s\n", index, f_output_GPX);
 
 cleanup:
         if (payload) FreeGPMFPayload(payload);
         payload = NULL;
         CloseGPMFSource();
     }
-
+    
+    if(f_output_KML != NULL) free(f_output_KML);
+    if(f_output_GPX != NULL) free(f_output_GPX);
+    
     return ret;
 }
