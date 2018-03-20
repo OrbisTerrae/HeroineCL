@@ -1,3 +1,15 @@
+todo:
+KML - create animation / tour - change color ?
+cmd line some check on temp value and on file name/dir output (robustness)
+bug: check malloc error...
+
+
+
+
+
+
+
+
 https://github.com/hypoxic/GoProInfo
 
 

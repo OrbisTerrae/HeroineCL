@@ -2,7 +2,7 @@
  *
  *  @brief Extract GPX from GoPro Hero5 MP4.
  *
- *  @version 0.2
+ *  @version 0.3.1
  *
  *  (C) Copyright 2018 OrbisTerrae
  *	
@@ -34,9 +34,7 @@
 #include "GPMF_parser.h"
 #include "GPMF_mp4reader.h"
 
-#define VERSION "0.3"
-
-
+#define VERSION "0.3.1"
 #define INIT_TEMP -273 // should be set to -273 to prevent Temp end HR - to be passed as a cmd line argument
 #define HR_BASE 65
 #define PI 3.14159265
@@ -63,9 +61,13 @@ void double2Ints(double f, int p, int *i, int *d)
 char* concat(const char *s1, const char *s2)
 {
     char *result = malloc(strlen(s1)+strlen(s2)+1);//+1 for the null-terminator
-    //in real code you would check for errors in malloc here
-    strcpy(result, s1);
-    strcat(result, s2);
+    if(result != NULL){
+        strcpy(result, s1);
+        strcat(result, s2);
+    }
+    else{
+        perror("malloc failed");
+    }
     return result;
 }
 
@@ -87,6 +89,7 @@ int main(int argc, char *argv[])
     int sec =0;
     double msec =0;
     int hour = 0;
+    int hasTemp=0,hasHR=0;
     int fractpart, intpart;
     float tempc = INIT_TEMP;
     int hr = HR_BASE;
@@ -108,9 +111,11 @@ int main(int argc, char *argv[])
          break;
        case 't':
            init_temp = atoi(optarg);
+           hasTemp=1;
          break;
        case 'r':
          hr_base = atoi(optarg);
+         hasHR=1;
          break;
        case 'o':
          f_output_GPX = optarg;
@@ -144,7 +149,6 @@ int main(int argc, char *argv[])
 //    time(&timer);
 //    tm_info = localtime(&timer);
     
-    
     if( stat(f_input, &st) != 0 )
         perror("stat failed");
 #ifdef _DARWIN_FEATURE_64_BIT_INODE
@@ -157,7 +161,6 @@ int main(int argc, char *argv[])
         printf("File time and date: %s", asctime(tm_info));
     
     strftime(TimeStr, 26, "%Y-%m-%dT%H:%M:%SZ", tm_info);
-
     metadatalength = OpenGPMFSource(f_input);
 
     if (metadatalength > 0.0) {
@@ -166,7 +169,7 @@ int main(int argc, char *argv[])
         if (f_output_GPX == NULL) {
             if (verbose) printf("no file output mentioned, using %s.GPX %s.KML\n", f_input, f_input);
             f_output_GPX = concat(f_input, ".GPX");
-            f_output_KML = concat(f_input, ".KML");
+            f_output_KML = concat(f_input, ".KML"); 
         }
         else{
             f_output_GPX = concat(f_output_GPX, ".GPX");
@@ -174,20 +177,21 @@ int main(int argc, char *argv[])
         }
         fp_GPX = fopen(f_output_GPX, "w");
         if (fp_GPX) {
-            //fprintf (stderr, "%s opened\n", f_output); 
-        } else {
+            if(verbose) printf ("%s opened\n", f_output_GPX); 
+        } 
+        else {
             fprintf(stderr, "ERROR: %s not opened\n", f_output_GPX);
             return -1;
         }
         
         fp_KML = fopen(f_output_KML, "w");
         if (fp_KML) {
-            //fprintf (stderr, "%s opened\n", f_output); 
-        } else {
+            if(verbose) printf ("%s opened\n", f_output_KML); 
+        } 
+        else {
             fprintf(stderr, "ERROR: %s not opened\n", f_output_KML);
             return -1;
         }
-
         basec = basename(f_input);
                    
         fprintf(fp_GPX, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\" ?>\n");
@@ -233,9 +237,9 @@ int main(int argc, char *argv[])
         fprintf(fp_KML, "        <textColor>FF134E96</textColor>\n");
         fprintf(fp_KML, "        <text>File: %s<br/>", basec);
         fprintf(fp_KML, "              Date: %2d-%2d-%d<br/>", tm_info->tm_mday, tm_info->tm_mon+1,tm_info->tm_year+1900);
-        if(tempc >= -150){
-            fprintf(fp_KML, "Temp: %f°C<br/>",tempc);
-        }
+        if(hasTemp) fprintf(fp_KML, "Temp: %f°C<br/>",tempc);
+        if(hasHR) fprintf(fp_KML, "Heart: %dbps<br/>",hr_base);
+        
         fprintf(fp_KML, "              https://sites.google.com/site/oterrae/<br/>");
         fprintf(fp_KML, "              %s v%s<br/>", argv[0],version); 
         fprintf(fp_KML, "              Copyright © 2017-%d Orbis Terrae<br/>",tm_info->tm_year+1900);
@@ -263,9 +267,6 @@ int main(int argc, char *argv[])
         fprintf(fp_KML, "    <MultiGeometry>\n");
         fprintf(fp_KML, "     <styleUrl>#OrbisTerrae</styleUrl>\n");
         fprintf(fp_KML, "     <visibility>1</visibility>\n");
-        
-        
-        
 
         for (index = 0; index < payloads; index++) {
             // Find all the available Streams and compute they sample rates
@@ -341,7 +342,6 @@ int main(int argc, char *argv[])
             fprintf(fp_GPX, "<!--                                frame %09D                          -->\n", index);
             if (verbose) printf("%06ds ", index);
 
-
             if (GPMF_OK == GPMF_FindNext(ms, STR2FOURCC("GPS5"), GPMF_RECURSE_LEVELS) || //GoPro Hero5 GPS
                     GPMF_OK == GPMF_FindNext(ms, STR2FOURCC("GPRI"), GPMF_RECURSE_LEVELS) || //GoPro Karma
                     GPMF_OK == GPMF_FindNext(ms, STR2FOURCC("TMPC"), GPMF_RECURSE_LEVELS)) //GoPro temp
@@ -376,7 +376,6 @@ int main(int argc, char *argv[])
                     //GPMF_FormattedData(ms, tmpbuffer, buffersize, 0, samples); // Output data in LittleEnd, but no scale
                     GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples, GPMF_TYPE_DOUBLE); //Output scaled data as floats
 
-
                     ptr = tmpbuffer;
                     if (key == STR2FOURCC("TMPC")) {
                         printf("<!--     TMPC Temperature detected   -->\n");
@@ -390,7 +389,7 @@ int main(int argc, char *argv[])
                     strftime(TimeStr, 26, "%Y-%m-%dT", tm_info);
                     // Time must be in the following format:  <time>2017-12-19T18:22:01.001Z</time>
 
-                    // first sample of the 1 second with extension - potentially
+                    // first sample of the 1 second with extension
                     fprintf(fp_GPX, "    <trkpt lat=\"%.14f\" lon=\"%.14f\">\n", ptr[0], ptr[1]);
                     fprintf(fp_GPX, "        <ele>%.2f</ele>\n", ptr[2]);
 
@@ -405,15 +404,16 @@ int main(int argc, char *argv[])
 
                     fprintf(fp_GPX, "        <time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
 
-                    if (tempc >= -150) {
+                    if (hasTemp || hasHR) {
                         fprintf(fp_GPX, "     <extensions>\n");
                         fprintf(fp_GPX, "      <gpxtpx:TrackPointExtension>\n");
-                        fprintf(fp_GPX, "           <gpxtpx:atemp>%.2f</gpxtpx:atemp>\n", tempc);
-                        fprintf(fp_GPX, "           <gpxtpx:hr>%d</gpxtpx:hr>\n", hr);
+                        if(hasTemp) fprintf(fp_GPX, "           <gpxtpx:atemp>%.2f</gpxtpx:atemp>\n", tempc);
+                        if (hasHR) fprintf(fp_GPX, "           <gpxtpx:hr>%d</gpxtpx:hr>\n", hr);
                         fprintf(fp_GPX, "       </gpxtpx:TrackPointExtension>\n");
                         fprintf(fp_GPX, "     </extensions>\n");
                         if (verbose) printf("Lat: %.14f - Long:%.14f - Alt:%.2fm (Temp:%.2f° - HR:%d)\n", ptr[0], ptr[1], ptr[2], tempc, hr);
-                    }else{
+                    }
+                    else{
                         if (verbose) printf("Lat: %.14f - Long:%.14f - Alt:%.2fm\n", ptr[0], ptr[1], ptr[2]);
                     }                    
                     fprintf(fp_GPX, "    </trkpt>\n");
@@ -425,12 +425,10 @@ int main(int argc, char *argv[])
                         fprintf(fp_KML,"      <altitudeMode>clampToGround</altitudeMode>\n");
                         fprintf(fp_KML,"       <coordinates>\n");
                     }
-                    else
-                    {
+                    else {
                         fprintf(fp_KML,"%.14f,%.14f,%.14f ",ptr[1],ptr[0],ptr[2]); 
                     }
                     
-
                     //following 17 samples without extension
                     for (i = 1; i < samples; i++) {
                         fprintf(fp_GPX, "<!-- %c%c%c%c lat:%.2f lon:%.2f alt:%.2f 2DS:%.2f 3DS:%.2f -->\n", PRINTF_4CC(key), ptr[0], ptr[1], ptr[2], ptr[3], ptr[4]);
@@ -443,28 +441,13 @@ int main(int argc, char *argv[])
                         hour = (int) ((int) (msec / (1000 * 60 * 60)) % 24);
                         double2Ints(msec / 1000, 3, &intpart, &fractpart);
                         fprintf(fp_GPX, "      <time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
-                        /*
-                         if (tempc >= -150) {
-                        fprintf(fp, "     <extensions>\n");
-                        fprintf(fp, "      <gpxtpx:TrackPointExtension>\n");
-                        fprintf(fp, "           <gpxtpx:atemp>%.2f</gpxtpx:atemp>\n", tempc);
-                        fprintf(fp, "           <gpxtpx:hr>%d</gpxtpx:hr>\n", hr);
-                        fprintf(fp, "       </gpxtpx:TrackPointExtension>\n");
-                        fprintf(fp, "     </extensions>\n");
-                       }
-                        */
                       fprintf(fp_GPX, "    </trkpt>\n");
-
                     }
-
-
                     free(tmpbuffer);
                 }
             }
             GPMF_ResetState(ms);
             fprintf(fp_GPX, "\n");
-
-
         }
 
         fprintf(fp_GPX, "    </trkseg>\n"
