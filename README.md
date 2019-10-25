@@ -1,6 +1,7 @@
-# Heroine ©2018 Orbis Terrae https://sites.google.com/site/oterrae/
+# Heroine ©2018 Orbis Terrae 
+https://sites.google.com/site/oterrae/
 
-Command Line App to convert GoPro Hero5 MP4 video to GPX & KML files
+Command Line app to convert GoPro Hero5 MP4 video to GPX & KML files
 GPX: compatible with Garmin Virb Edit and other apps
 KML: Google Earth
 
@@ -17,6 +18,6 @@ Usage: ./HeroineCL [-h] [-v] [-t Temperature] [-r HearRate] [-o Output] GOPRO_WI
 - GOPRO_WITH_GPMF.MP4 = source file with HERO5 GPMF data
 
 
-Tested on macOS 10.13 & 10.10 - not tested on windows
+Tested on macOS 10.13 & 10.14 - not tested on windows
 
 Questions, remarks, feedback: oterrae@gmail.com
