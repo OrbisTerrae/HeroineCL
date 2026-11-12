@@ -35,20 +35,24 @@ typedef struct SampleToChunk
 	uint32_t id;
 } SampleToChunk;
 
-double OpenGPMFSource(char *filename);
-double OpenGPMFSourceUDTA(char *filename);
-void CloseGPMFSource(void);
-uint32_t GetNumberGPMFPayloads(void);
-uint32_t *GetGPMFPayload(uint32_t *lastpayload, uint32_t index);
-void FreeGPMFPayload(uint32_t *lastpayload);
-uint32_t GetGPMFPayloadSize(uint32_t index);
-uint32_t GetGPMFPayloadTime(uint32_t index, double *in, double *out); //MP4 timestamps for the payload
+typedef struct GPMF_Source GPMF_Source;
+
+GPMF_Source *GPMF_SourceCreate(void);
+void GPMF_SourceDestroy(GPMF_Source *source);
+double OpenGPMFSource(GPMF_Source *source, const char *filename);
+double OpenGPMFSourceUDTA(GPMF_Source *source, const char *filename);
+void CloseGPMFSource(GPMF_Source *source);
+uint32_t GetNumberGPMFPayloads(GPMF_Source *source);
+uint32_t *GetGPMFPayload(GPMF_Source *source, uint32_t *lastpayload, uint32_t index);
+void FreeGPMFPayload(GPMF_Source *source, uint32_t *lastpayload);
+uint32_t GetGPMFPayloadSize(GPMF_Source *source, uint32_t index);
+uint32_t GetGPMFPayloadTime(GPMF_Source *source, uint32_t index, double *in, double *out); // MP4 payload timestamps
 
 #define GPMF_SAMPLE_RATE_FAST		0
 #define GPMF_SAMPLE_RATE_PRECISE	1
 
-double GetGPMFSampleRate(uint32_t fourcc, uint32_t flags);
-double GetGPMFSampleRateAndTimes(GPMF_stream *gs, double lastrate, uint32_t index, double *in, double *out); //Jitter corrected sample(s) time, if lastrate is unknown, send 0.0 and it will be computed
+double GetGPMFSampleRate(GPMF_Source *source, uint32_t fourcc, uint32_t flags);
+double GetGPMFSampleRateAndTimes(GPMF_Source *source, GPMF_stream *gs, double lastrate, uint32_t index, double *in, double *out);
 
 #ifdef __cplusplus
 }

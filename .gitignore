@@ -1,6 +1,21 @@
+# Local build products
+/build/
+/HeroineCLI
+*.o
+
+# Generated telemetry outputs and downloaded/test binaries
+*.GPX
+*.KML
+*.exe
+/HeroineCLI-clang*
+
+# Operating system and IDE state
+.DS_Store
+/.vscode/
+/nbproject/
 /HeroineJ/nbproject/private/
 /HeroineJ/build/
 /HeroineJ/dist/
+/HeroineJFX/nbproject/private/
 /HeroineJFX/build/
 /HeroineJFX/dist/
-/HeroineJFX/nbproject/private/

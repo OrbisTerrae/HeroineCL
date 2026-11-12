@@ -1,479 +1,319 @@
-/*! @file HeroineCLI.c
- *
- *  @brief Extract GPX from GoPro Hero5 MP4.
- *
- *  @version 0.3.1
- *
- *  (C) Copyright 2018 OrbisTerrae
- *	
- *  Licensed under either:
- *  - Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0  
- *  - MIT license, http://opensource.org/licenses/MIT
- *  at your option.
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
- *
- */
+#define _POSIX_C_SOURCE 200809L
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
+#include <errno.h>
+#include <getopt.h>
+#include <math.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#include <ctype.h>
-#include <math.h>
-#include <libgen.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 
 #include "GPMF_parser.h"
 #include "GPMF_mp4reader.h"
 
-#define VERSION "0.3.1"
-#define INIT_TEMP -273 // should be set to -273 to prevent Temp end HR - to be passed as a cmd line argument
-#define HR_BASE 65
-#define PI 3.14159265
+#define DEFAULT_TEMPERATURE 20.0
+#define DEFAULT_HEART_RATE 65
+#define FALLBACK_GPS_RATE 18.177936
 
+typedef struct Options {
+    const char *input;
+    const char *output_prefix;
+    int verbose;
+    int include_temperature;
+    int include_heart_rate;
+    double temperature;
+    int heart_rate;
+} Options;
 
-extern void PrintGPMF(GPMF_stream *ms);
-
-void double2Ints(double f, int p, int *i, int *d)
+static void usage(FILE *stream, const char *program)
 {
-    // f = float, p=decimal precision, i=integer, d=decimal
-    int   li;
-    int   prec=1;
-    
-    for(int x=p;x>0;x--)
-    {
-        prec*=10;
-    };  // same as power(10,p)
-    
-    li = (int) f;              // get integer part
-    *d = (int) ((f-li)*prec);  // get decimal part
-    *i = li;
+    fprintf(stream,
+            "Usage: %s [-v] [-t Celsius] [-r bpm] [-o output-prefix] input.mp4\n"
+            "Convert GoPro GPMF GPS telemetry to GPX and KML.\n"
+            "  -h             Show this help\n"
+            "  -v             Print progress\n"
+            "  -t Celsius     Add a constant temperature extension\n"
+            "  -r bpm         Add a constant heart-rate extension\n"
+            "  -o prefix      Write prefix.GPX and prefix.KML\n",
+            program);
 }
 
-char* concat(const char *s1, const char *s2)
+static int parse_number(const char *text, double min, double max, double *value)
 {
-    char *result = malloc(strlen(s1)+strlen(s2)+1);//+1 for the null-terminator
-    if(result != NULL){
-        strcpy(result, s1);
-        strcat(result, s2);
-    }
-    else{
-        perror("malloc failed");
-    }
-    return result;
+    char *end = NULL;
+    errno = 0;
+    double parsed = strtod(text, &end);
+    if (errno || end == text || *end != '\0' || !isfinite(parsed) || parsed < min || parsed > max)
+        return 0;
+    *value = parsed;
+    return 1;
 }
 
-int main(int argc, char *argv[])
+static int parse_options(int argc, char **argv, Options *options)
 {
-    int32_t ret = GPMF_OK;
-	GPMF_stream metadata_stream, *ms = &metadata_stream;
-	double metadatalength;
-	uint32_t *payload = NULL; //buffer to store GPMF samples from the MP4.
-    time_t timer;
-    struct tm* tm_info;
-    double GPSrate = 18.177936;
-    char TimeStr[26];
-    char* f_output_GPX=NULL;
-    char* f_output_KML=NULL;
-    char* f_input;
-    int verbose = 0;
-    int min =0;
-    int sec =0;
-    double msec =0;
-    int hour = 0;
-    int hasTemp=0,hasHR=0;
-    int fractpart, intpart;
-    float tempc = INIT_TEMP;
-    int hr = HR_BASE;
-    int AltInit = 0;
-    int c;
-    FILE *fp_GPX = NULL;
-    FILE *fp_KML = NULL;
-    char* version = VERSION;
-    int init_temp = INIT_TEMP;
-    int hr_base = HR_BASE;
-    char* basec;
-    struct stat st;
-    
-    while ((c = getopt (argc, argv, "vht:r:o:")) != -1)
-     switch (c)
-       {
-       case 'v':
-         verbose = 1;
-         break;
-       case 't':
-           init_temp = atoi(optarg);
-           hasTemp=1;
-         break;
-       case 'r':
-         hr_base = atoi(optarg);
-         hasHR=1;
-         break;
-       case 'o':
-         f_output_GPX = optarg;
-         f_output_KML = optarg;
-         break;
-       case 'h':
-         fprintf (stderr, "Usage: %s [-h] [-v] [-t Temperature] [-r HearRate] [-o Output] GOPRO_WITH_GPMF.MP4\n", argv[0]);
-         return 1;
-       case '?':
-         if (optopt == 't'  || optopt == 'r'  || optopt == 'o' )
-           fprintf (stderr, "Option -%c requires an argument.\n", optopt);
-         else if (isprint (optopt))
-           fprintf (stderr, "Unknown option `-%c'.\n", optopt);
-         else
-           fprintf (stderr,
-                    "Unknown option character `\\x%x'.\n",
-                    optopt);
-         return 1;
-       default:
-         abort ();
-       }
-     if(optind < argc){
-         f_input = argv[argc-1];
-         
-     }
-     else {
-         fprintf (stderr, "Usage: %s [-h] [-v] [-t Temperature] [-r HearRate] [-o Output] GOPRO_WITH_GPMF.MP4\n", argv[0]);
-         return 1;
+    int option;
+    memset(options, 0, sizeof(*options));
+    options->temperature = DEFAULT_TEMPERATURE;
+    options->heart_rate = DEFAULT_HEART_RATE;
+    while ((option = getopt(argc, argv, "hvt:r:o:")) != -1) {
+        double value;
+        switch (option) {
+        case 'h': usage(stdout, argv[0]); return 2;
+        case 'v': options->verbose = 1; break;
+        case 't':
+            if (!parse_number(optarg, -100.0, 100.0, &options->temperature)) {
+                fprintf(stderr, "Invalid temperature: %s\n", optarg); return 0;
+            }
+            options->include_temperature = 1;
+            break;
+        case 'r':
+            if (!parse_number(optarg, 0.0, 300.0, &value) || floor(value) != value) {
+                fprintf(stderr, "Invalid heart rate: %s\n", optarg); return 0;
+            }
+            options->heart_rate = (int)value;
+            options->include_heart_rate = 1;
+            break;
+        case 'o':
+            if (!optarg || !*optarg) { fprintf(stderr, "Output prefix must not be empty\n"); return 0; }
+            options->output_prefix = optarg;
+            break;
+        default: usage(stderr, argv[0]); return 0;
+        }
     }
+    if (argc - optind != 1) {
+        usage(stderr, argv[0]);
+        return 0;
+    }
+    options->input = argv[optind];
+    return 1;
+}
 
-//    time(&timer);
-//    tm_info = localtime(&timer);
-    
-    if( stat(f_input, &st) != 0 )
-        perror("stat failed");
-#ifdef _DARWIN_FEATURE_64_BIT_INODE
-    tm_info = localtime(&st.st_birthtimespec); 
-#else
-    tm_info = localtime(&st.st_ctime);
-#endif
-    
-    if(verbose) 
-        printf("File time and date: %s", asctime(tm_info));
-    
-    strftime(TimeStr, 26, "%Y-%m-%dT%H:%M:%SZ", tm_info);
-    metadatalength = OpenGPMFSource(f_input);
+static char *make_path(const char *prefix, const char *extension)
+{
+    size_t a = strlen(prefix), b = strlen(extension);
+    if (a > SIZE_MAX - b - 1) return NULL;
+    char *path = malloc(a + b + 1);
+    if (path) {
+        memcpy(path, prefix, a);
+        memcpy(path + a, extension, b + 1);
+    }
+    return path;
+}
 
-    if (metadatalength > 0.0) {
-        if (verbose) printf("Orbis Terrae %s %s\n", argv[0], version);
-        uint32_t index, payloads = GetNumberGPMFPayloads();
-        if (f_output_GPX == NULL) {
-            if (verbose) printf("no file output mentioned, using %s.GPX %s.KML\n", f_input, f_input);
-            f_output_GPX = concat(f_input, ".GPX");
-            f_output_KML = concat(f_input, ".KML"); 
-        }
-        else{
-            f_output_GPX = concat(f_output_GPX, ".GPX");
-            f_output_KML = concat(f_output_KML, ".KML");
-        }
-        fp_GPX = fopen(f_output_GPX, "w");
-        if (fp_GPX) {
-            if(verbose) printf ("%s opened\n", f_output_GPX); 
-        } 
-        else {
-            fprintf(stderr, "ERROR: %s not opened\n", f_output_GPX);
-            return -1;
-        }
-        
-        fp_KML = fopen(f_output_KML, "w");
-        if (fp_KML) {
-            if(verbose) printf ("%s opened\n", f_output_KML); 
-        } 
-        else {
-            fprintf(stderr, "ERROR: %s not opened\n", f_output_KML);
-            return -1;
-        }
-        basec = basename(f_input);
-                   
-        fprintf(fp_GPX, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\" ?>\n");
-        fprintf(fp_GPX, "<gpx xmlns=\"http://www.topografix.com/GPX/1/1\"\n");
-        fprintf(fp_GPX, "     xmlns:gpxx=\"http://www.garmin.com/xmlschemas/GpxExtensions/v3\"\n");
-        fprintf(fp_GPX, "     xmlns:gpxtrkx=\"http://www.garmin.com/xmlschemas/TrackStatsExtension/v1\"\n");
-        fprintf(fp_GPX, "     xmlns:gpxtrkoffx=\"http://www.garmin.com/xmlschemas/TrackMovieOffsetExtension/v1\"\n");
-        fprintf(fp_GPX, "     xmlns:wptx1=\"http://www.garmin.com/xmlschemas/WaypointExtension/v1\"\n");
-        fprintf(fp_GPX, "     xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v1\"\n");
-        fprintf(fp_GPX, "     xmlns:gpxpx=\"http://www.garmin.com/xmlschemas/PowerExtension/v1\"\n");
-        fprintf(fp_GPX, "     xmlns:gpxacc=\"http://www.garmin.com/xmlschemas/AccelerationExtension/v1\"\n");
-        fprintf(fp_GPX, "     creator=\"VIRB Elite\"\n");
-        fprintf(fp_GPX, "     version=\"1.1\"\n");
-        fprintf(fp_GPX, "     xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n");
-        fprintf(fp_GPX, "     <metadata>\n");
-        fprintf(fp_GPX, "       <link href=\"https://sites.google.com/site/oterrae/\">\n");
-        fprintf(fp_GPX, "          <text>Orbis Terrae</text>\n");
-        fprintf(fp_GPX, "       </link>\n");
-        fprintf(fp_GPX, "       <time>%s</time>\n", TimeStr);
-        fprintf(fp_GPX, "     </metadata>\n");
-        fprintf(fp_GPX, "<trk>\n");
-        fprintf(fp_GPX, "  <name>%s</name>\n", basec);
-        fprintf(fp_GPX, "       <extensions>\n");
-        fprintf(fp_GPX, "           <gpxx:TrackExtension>\n");
-        fprintf(fp_GPX, "              <gpxx:DisplayColor>Cyan</gpxx:DisplayColor>\n");
-        fprintf(fp_GPX, "           </gpxx:TrackExtension>\n");
-        fprintf(fp_GPX, "           <gpxtrkoffx:TrackMovieOffsetExtension>\n");
-        fprintf(fp_GPX, "              <gpxtrkoffx:StartOffsetSecs>0</gpxtrkoffx:StartOffsetSecs>\n");
-        fprintf(fp_GPX, "           </gpxtrkoffx:TrackMovieOffsetExtension>\n");
-        fprintf(fp_GPX, "       </extensions>\n");
-        fprintf(fp_GPX, "  <trkseg>\n");
-        
-        strftime(TimeStr, 26, "%d-%m-%Y %H:%M:%S", tm_info);
-        fprintf(fp_KML, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        fprintf(fp_KML, "<kml  xmlns=\"http://earth.google.com/kml/2.2\" xmlns:gx=\"http://www.google.com/kml/ext/2.2\" xmlns:trails=\"http://www.google.com/kml/trails/1.0\">\n");
-        fprintf(fp_KML, " <Document>\n");
-        fprintf(fp_KML, "  <name>HeroineGPS %s</name>\n", basec);
-        fprintf(fp_KML, "  <Placemark>\n");
-        fprintf(fp_KML, "   <name>%s %s</name>\n",argv[0],TimeStr);
-        fprintf(fp_KML, "    <Style id=\"OrbisTerrae\">\n");
-        fprintf(fp_KML, "        <BalloonStyle>\n");
-        fprintf(fp_KML, "        <bgColor>DF8DB2D8</bgColor>\n");
-        fprintf(fp_KML, "        <textColor>FF134E96</textColor>\n");
-        fprintf(fp_KML, "        <text>File: %s<br/>", basec);
-        fprintf(fp_KML, "              Date: %2d-%2d-%d<br/>", tm_info->tm_mday, tm_info->tm_mon+1,tm_info->tm_year+1900);
-        if(hasTemp) fprintf(fp_KML, "Temp: %f°C<br/>",tempc);
-        if(hasHR) fprintf(fp_KML, "Heart: %dbps<br/>",hr_base);
-        
-        fprintf(fp_KML, "              https://sites.google.com/site/oterrae/<br/>");
-        fprintf(fp_KML, "              %s v%s<br/>", argv[0],version); 
-        fprintf(fp_KML, "              Copyright © 2017-%d Orbis Terrae<br/>",tm_info->tm_year+1900);
-        fprintf(fp_KML, "              All rights reserved.</text>\n");
-        fprintf(fp_KML, "        </BalloonStyle>\n");
-        
-        fprintf(fp_KML, "     <LineStyle>\n");
-        fprintf(fp_KML, "      <color>DF8DB2D8</color>\n"); 
-        fprintf(fp_KML, "      <width>5</width>\n");
-        fprintf(fp_KML, "     </LineStyle>\n");
-        fprintf(fp_KML, "     <PolyStyle>\n");
-        fprintf(fp_KML, "        <color>0f00ff00</color>\n");
-        fprintf(fp_KML, "     </PolyStyle>\n");
-        fprintf(fp_KML, "    <LabelStyle>\n");
-        fprintf(fp_KML, "        <color>EF134E96</color>\n");
-        fprintf(fp_KML, "     </LabelStyle>\n");
-        fprintf(fp_KML, "     <IconStyle>\n");
-        fprintf(fp_KML, "        <color>EF134E96</color>\n");
-        fprintf(fp_KML, "        <scale>1</scale>\n");
-        fprintf(fp_KML, "        <Icon>\n");
-        fprintf(fp_KML, "          <href>http://maps.google.com/mapfiles/kml/shapes/arrow.png</href>\n");
-        fprintf(fp_KML, "        </Icon>\n");
-        fprintf(fp_KML, "      </IconStyle>\n");
-        fprintf(fp_KML, "    </Style>\n");
-        fprintf(fp_KML, "    <MultiGeometry>\n");
-        fprintf(fp_KML, "     <styleUrl>#OrbisTerrae</styleUrl>\n");
-        fprintf(fp_KML, "     <visibility>1</visibility>\n");
+static FILE *open_temporary_output(const char *target, char **temporary_path)
+{
+    *temporary_path = make_path(target, ".tmp.XXXXXX");
+    if (!*temporary_path) return NULL;
+    int descriptor = mkstemp(*temporary_path);
+    if (descriptor < 0) return NULL;
+    FILE *file = fdopen(descriptor, "w");
+    if (!file) {
+        close(descriptor);
+        unlink(*temporary_path);
+    }
+    return file;
+}
 
-        for (index = 0; index < payloads; index++) {
-            // Find all the available Streams and compute they sample rates
-            while (GPMF_OK == GPMF_FindNext(ms, GPMF_KEY_STREAM, GPMF_RECURSE_LEVELS)) {
-                if (GPMF_OK == GPMF_SeekToSamples(ms)) //find the last FOURCC within the stream
-                {
-                    uint32_t fourcc = GPMF_Key(ms);
-                    double rate = GetGPMFSampleRate(fourcc, GPMF_SAMPLE_RATE_PRECISE); // GPMF_SAMPLE_RATE_FAST);
-                    if (verbose) {
-                        if (index <= 1) {
-                            printf("%c%c%c%c sampling rate = %f Hz\n", PRINTF_4CC(fourcc), rate);
-                        }
-                    }
-                    if (fourcc == STR2FOURCC("GPS5")) {
-                        GPSrate = rate;
-                    }
-                }
+static const char *file_name(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+static void write_xml_text(FILE *file, const char *text)
+{
+    for (; *text; ++text) {
+        switch (*text) {
+        case '&': fputs("&amp;", file); break;
+        case '<': fputs("&lt;", file); break;
+        case '>': fputs("&gt;", file); break;
+        case '"': fputs("&quot;", file); break;
+        case '\'': fputs("&apos;", file); break;
+        default: fputc((unsigned char)*text, file); break;
+        }
+    }
+}
+
+static int write_headers(FILE *gpx, FILE *kml, const char *input_name)
+{
+    fputs("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+          "<gpx version=\"1.1\" creator=\"HeroineCLI\" xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v1\">\n"
+          " <trk><name>", gpx);
+    write_xml_text(gpx, input_name);
+    fputs("</name><trkseg>\n", gpx);
+    fputs("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+          "<kml xmlns=\"http://www.opengis.net/kml/2.2\"><Document><name>", kml);
+    write_xml_text(kml, input_name);
+    fputs("</name><Placemark><LineString><altitudeMode>absolute</altitudeMode><coordinates>\n", kml);
+    return !ferror(gpx) && !ferror(kml);
+}
+
+static int write_time(FILE *file, time_t base, double offset)
+{
+    double whole;
+    double fraction = modf(offset, &whole);
+    if (fraction < 0) { fraction += 1.0; whole -= 1.0; }
+    time_t stamp = base + (time_t)whole;
+    struct tm utc;
+    char date[32];
+    if (!gmtime_r(&stamp, &utc) || !strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%S", &utc))
+        return 0;
+    long millis = lround(fraction * 1000.0);
+    if (millis == 1000) {
+        ++stamp;
+        if (!gmtime_r(&stamp, &utc) || !strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%S", &utc))
+            return 0;
+        millis = 0;
+    }
+    return fprintf(file, "%s.%03ldZ", date, millis) >= 0;
+}
+
+static int write_point(FILE *gpx, FILE *kml, const double *gps, time_t base,
+                       double offset, const Options *options)
+{
+    if (!isfinite(gps[0]) || !isfinite(gps[1]) || !isfinite(gps[2]) ||
+        gps[0] < -90.0 || gps[0] > 90.0 || gps[1] < -180.0 || gps[1] > 180.0)
+        return 1;
+    if (fprintf(gpx, " <trkpt lat=\"%.8f\" lon=\"%.8f\"><ele>%.3f</ele><time>",
+                gps[0], gps[1], gps[2]) < 0 || !write_time(gpx, base, offset)) return 0;
+    if (options->include_temperature || options->include_heart_rate) {
+        fputs("</time><extensions><gpxtpx:TrackPointExtension>", gpx);
+        if (options->include_temperature)
+            fprintf(gpx, "<gpxtpx:atemp>%.1f</gpxtpx:atemp>", options->temperature);
+        if (options->include_heart_rate)
+            fprintf(gpx, "<gpxtpx:hr>%d</gpxtpx:hr>", options->heart_rate);
+        fputs("</gpxtpx:TrackPointExtension></extensions></trkpt>\n", gpx);
+    } else {
+        fputs("</time></trkpt>\n", gpx);
+    }
+    return fprintf(kml, "%.8f,%.8f,%.3f ", gps[1], gps[0], gps[2]) >= 0 &&
+           !ferror(gpx) && !ferror(kml);
+}
+
+static int close_outputs(FILE **gpx, FILE **kml)
+{
+    int ok = 1;
+    if (*gpx && fclose(*gpx) != 0) ok = 0;
+    if (*kml && fclose(*kml) != 0) ok = 0;
+    *gpx = NULL;
+    *kml = NULL;
+    return ok;
+}
+
+int main(int argc, char **argv)
+{
+    Options options;
+    int parsed = parse_options(argc, argv, &options);
+    if (parsed != 1) return parsed == 2 ? 0 : 2;
+
+    int result = 1;
+    struct stat input_stat;
+    FILE *gpx = NULL, *kml = NULL;
+    uint32_t *payload = NULL;
+    GPMF_stream stream = {0};
+    GPMF_Source *source = GPMF_SourceCreate();
+    char *gpx_path = NULL, *kml_path = NULL, *gpx_temp = NULL, *kml_temp = NULL;
+    const char *prefix = options.output_prefix ? options.output_prefix : options.input;
+    const char *name = file_name(options.input);
+    time_t base_time;
+
+    if (!source) { fprintf(stderr, "Out of memory creating GPMF reader\n"); goto cleanup; }
+
+    if (stat(options.input, &input_stat) != 0) {
+        fprintf(stderr, "Cannot access input '%s': %s\n", options.input, strerror(errno));
+        goto cleanup;
+    }
+    base_time = input_stat.st_mtime;
+    gpx_path = make_path(prefix, ".GPX");
+    kml_path = make_path(prefix, ".KML");
+    if (!gpx_path || !kml_path) { fprintf(stderr, "Out of memory creating output paths\n"); goto cleanup; }
+
+    double metadata_length = OpenGPMFSource(source, options.input);
+    if (metadata_length <= 0.0 || GetNumberGPMFPayloads(source) == 0) {
+        fprintf(stderr, "No readable GPMF metadata found in '%s'\n", options.input);
+        goto cleanup;
+    }
+    gpx = open_temporary_output(gpx_path, &gpx_temp);
+    if (!gpx) { fprintf(stderr, "Cannot create temporary GPX output for '%s': %s\n", gpx_path, strerror(errno)); goto cleanup; }
+    kml = open_temporary_output(kml_path, &kml_temp);
+    if (!kml) { fprintf(stderr, "Cannot create temporary KML output for '%s': %s\n", kml_path, strerror(errno)); goto cleanup; }
+    if (!write_headers(gpx, kml, name)) { fprintf(stderr, "Failed writing output headers\n"); goto cleanup; }
+
+    uint32_t payload_count = GetNumberGPMFPayloads(source);
+    double gps_rate = GetGPMFSampleRate(source, STR2FOURCC("GPS5"), GPMF_SAMPLE_RATE_PRECISE);
+    if (!(gps_rate > 0.0) || !isfinite(gps_rate)) gps_rate = FALLBACK_GPS_RATE;
+    uint64_t points = 0;
+    for (uint32_t index = 0; index < payload_count; ++index) {
+        uint32_t payload_size = GetGPMFPayloadSize(source, index);
+        if (!payload_size || payload_size > INT32_MAX) { fprintf(stderr, "Invalid metadata payload size at index %u\n", index); goto cleanup; }
+        uint32_t *next_payload = GetGPMFPayload(source, payload, index);
+        if (!next_payload) { fprintf(stderr, "Cannot read metadata payload %u\n", index); goto cleanup; }
+        payload = next_payload;
+        if (stream.cbhandle) GPMF_Free(&stream);
+        if (GPMF_Init(&stream, payload, payload_size) != GPMF_OK) {
+            fprintf(stderr, "Invalid GPMF payload %u\n", index); goto cleanup;
+        }
+        double in = 0.0, out = 0.0;
+        if (GetGPMFPayloadTime(source, index, &in, &out) != GPMF_OK) {
+            fprintf(stderr, "Cannot determine timestamp for payload %u\n", index); goto cleanup;
+        }
+        if (GPMF_OK == GPMF_FindNext(&stream, STR2FOURCC("GPS5"), GPMF_RECURSE_LEVELS)) {
+            uint32_t samples = GPMF_Repeat(&stream);
+            uint32_t elements = GPMF_ElementsInStruct(&stream);
+            if (elements < 3 || samples > UINT32_MAX / elements ||
+                samples * elements > UINT32_MAX / (uint32_t)sizeof(double)) {
+                fprintf(stderr, "Invalid GPS5 sample dimensions in payload %u\n", index); goto cleanup;
             }
-
-            uint32_t payloadsize = GetGPMFPayloadSize(index);
-            double in = 0.0, out = 0.0; //times
-            payload = GetGPMFPayload(payload, index);
-            if (payload == NULL)
-                goto cleanup;
-
-            ret = GetGPMFPayloadTime(index, &in, &out);
-            if (ret != GPMF_OK)
-                goto cleanup;
-
-            ret = GPMF_Init(ms, payload, payloadsize);
-            if (ret != GPMF_OK)
-                goto cleanup;
-
-            // Find all the available Streams and the data carrying FourCC
-            if (index == 0) // show first payload 
-            {
-                while (GPMF_OK == GPMF_FindNext(ms, GPMF_KEY_STREAM, GPMF_RECURSE_LEVELS)) {
-                    if (GPMF_OK == GPMF_SeekToSamples(ms)) //find the last FOURCC within the stream
-                    {
-                        uint32_t key = GPMF_Key(ms);
-                        GPMF_SampleType type = GPMF_Type(ms);
-                        uint32_t elements = GPMF_ElementsInStruct(ms);
-                        //uint32_t samples = GPMF_Repeat(ms);
-                        uint32_t samples = GPMF_PayloadSampleCount(ms);
-
-                        if (samples) {
-                            if (verbose) printf("STRM of %c%c%c%c found\n", PRINTF_4CC(key));
-
-                            if (type == GPMF_TYPE_COMPLEX) {
-                                GPMF_stream find_stream;
-                                GPMF_CopyState(ms, &find_stream);
-
-                                if (GPMF_OK == GPMF_FindPrev(&find_stream, GPMF_KEY_TYPE, GPMF_CURRENT_LEVEL)) {
-                                    char tmp[64];
-                                    char *data = (char *) GPMF_RawData(&find_stream);
-                                    int size = GPMF_RawDataSize(&find_stream);
-
-                                    if (size < sizeof (tmp)) {
-                                        memcpy(tmp, data, size);
-                                        tmp[size] = 0;
-                                    }
-                                }
-
-                            } else {
-                            }
-                        }
-                    }
+            uint32_t buffer_size = samples * elements * (uint32_t)sizeof(double);
+            double *values = malloc(buffer_size);
+            if (!values) { fprintf(stderr, "Out of memory decoding GPS5 payload %u\n", index); goto cleanup; }
+            GPMF_ERR decode = GPMF_ScaledData(&stream, values, buffer_size, 0, samples, GPMF_TYPE_DOUBLE);
+            if (decode != GPMF_OK) { free(values); fprintf(stderr, "Cannot decode GPS5 payload %u (error %u)\n", index, decode); goto cleanup; }
+            for (uint32_t sample = 0; sample < samples; ++sample) {
+                double *gps = values + sample * elements;
+                double offset = in + (double)sample / gps_rate;
+                if (!write_point(gpx, kml, gps, base_time, offset, &options)) {
+                    free(values); fprintf(stderr, "Failed writing telemetry output\n"); goto cleanup;
                 }
-                GPMF_ResetState(ms);
-                fprintf(fp_GPX, "\n");
+                if (isfinite(gps[0]) && gps[0] >= -90.0 && gps[0] <= 90.0 &&
+                    isfinite(gps[1]) && gps[1] >= -180.0 && gps[1] <= 180.0)
+                    ++points;
             }
-
-            fprintf(fp_GPX, "<!--                                frame %09D                          -->\n", index);
-            if (verbose) printf("%06ds ", index);
-
-            if (GPMF_OK == GPMF_FindNext(ms, STR2FOURCC("GPS5"), GPMF_RECURSE_LEVELS) || //GoPro Hero5 GPS
-                    GPMF_OK == GPMF_FindNext(ms, STR2FOURCC("GPRI"), GPMF_RECURSE_LEVELS) || //GoPro Karma
-                    GPMF_OK == GPMF_FindNext(ms, STR2FOURCC("TMPC"), GPMF_RECURSE_LEVELS)) //GoPro temp
-            {
-                uint32_t key = GPMF_Key(ms);
-                uint32_t samples = GPMF_Repeat(ms);
-                uint32_t elements = GPMF_ElementsInStruct(ms);
-                uint32_t buffersize = samples * elements * sizeof (double);
-                GPMF_stream find_stream;
-                double *ptr, *tmpbuffer = malloc(buffersize);
-                char units[10][6] = {""};
-                uint32_t unit_samples = 1;
-
-                if (tmpbuffer && samples) {
-                    uint32_t i, j;
-
-                    //Search for any units to display
-                    GPMF_CopyState(ms, &find_stream);
-                    if (GPMF_OK == GPMF_FindPrev(&find_stream, GPMF_KEY_SI_UNITS, GPMF_CURRENT_LEVEL) ||
-                            GPMF_OK == GPMF_FindPrev(&find_stream, GPMF_KEY_UNITS, GPMF_CURRENT_LEVEL)) {
-                        char *data = (char *) GPMF_RawData(&find_stream);
-                        int ssize = GPMF_StructSize(&find_stream);
-                        unit_samples = GPMF_Repeat(&find_stream);
-
-                        for (i = 0; i < unit_samples; i++) {
-                            memcpy(units[i], data, ssize);
-                            units[i][ssize] = 0;
-                            data += ssize;
-                        }
-                    }
-
-                    //GPMF_FormattedData(ms, tmpbuffer, buffersize, 0, samples); // Output data in LittleEnd, but no scale
-                    GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples, GPMF_TYPE_DOUBLE); //Output scaled data as floats
-
-                    ptr = tmpbuffer;
-                    if (key == STR2FOURCC("TMPC")) {
-                        printf("<!--     TMPC Temperature detected   -->\n");
-                        tempc = ptr[0];
-                        //not tested, likely to break
-                    }
-                    if (index == 0) {
-                        AltInit = ptr[2];
-                    }
-                    /* There are 18 samples (18.177936Hz) per 1s data     */
-                    strftime(TimeStr, 26, "%Y-%m-%dT", tm_info);
-                    // Time must be in the following format:  <time>2017-12-19T18:22:01.001Z</time>
-
-                    // first sample of the 1 second with extension
-                    fprintf(fp_GPX, "    <trkpt lat=\"%.14f\" lon=\"%.14f\">\n", ptr[0], ptr[1]);
-                    fprintf(fp_GPX, "        <ele>%.2f</ele>\n", ptr[2]);
-
-                    tempc = init_temp - ((ptr[2] - AltInit) / 100) + ((rand() % 10) / 10) ;
-                    hr = hr_base + sin(index * PI / 180) * 10 + rand() % 5;
-                    
-                    msec = (in)*1000 + tm_info->tm_sec *1000+ tm_info->tm_min *60*1000 + tm_info->tm_hour*60*60*1000;
-                    sec = (int) ((msec / 1000)) % 60;
-                    min = (int) ((int) (msec / (1000 * 60)) % 60);
-                    hour = (int) ((int) (msec / (1000 * 60 * 60)) % 24);
-                    double2Ints(msec / 1000, 3, &intpart, &fractpart);
-
-                    fprintf(fp_GPX, "        <time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
-
-                    if (hasTemp || hasHR) {
-                        fprintf(fp_GPX, "     <extensions>\n");
-                        fprintf(fp_GPX, "      <gpxtpx:TrackPointExtension>\n");
-                        if(hasTemp) fprintf(fp_GPX, "           <gpxtpx:atemp>%.2f</gpxtpx:atemp>\n", tempc);
-                        if (hasHR) fprintf(fp_GPX, "           <gpxtpx:hr>%d</gpxtpx:hr>\n", hr);
-                        fprintf(fp_GPX, "       </gpxtpx:TrackPointExtension>\n");
-                        fprintf(fp_GPX, "     </extensions>\n");
-                        if (verbose) printf("Lat: %.14f - Long:%.14f - Alt:%.2fm (Temp:%.2f° - HR:%d)\n", ptr[0], ptr[1], ptr[2], tempc, hr);
-                    }
-                    else{
-                        if (verbose) printf("Lat: %.14f - Long:%.14f - Alt:%.2fm\n", ptr[0], ptr[1], ptr[2]);
-                    }                    
-                    fprintf(fp_GPX, "    </trkpt>\n");
-                    
-                    if(index == 0){
-                        fprintf(fp_KML,"     <Point><coordinates>%.14f,%.14f,%.14f</coordinates></Point>\n",ptr[1],ptr[0],ptr[2]); 
-                        fprintf(fp_KML,"     <LineString>\n");
-                        fprintf(fp_KML,"      <tessellate>1</tessellate>\n");
-                        fprintf(fp_KML,"      <altitudeMode>clampToGround</altitudeMode>\n");
-                        fprintf(fp_KML,"       <coordinates>\n");
-                    }
-                    else {
-                        fprintf(fp_KML,"%.14f,%.14f,%.14f ",ptr[1],ptr[0],ptr[2]); 
-                    }
-                    
-                    //following 17 samples without extension
-                    for (i = 1; i < samples; i++) {
-                        fprintf(fp_GPX, "<!-- %c%c%c%c lat:%.2f lon:%.2f alt:%.2f 2DS:%.2f 3DS:%.2f -->\n", PRINTF_4CC(key), ptr[0], ptr[1], ptr[2], ptr[3], ptr[4]);
-                        fprintf(fp_GPX, "    <trkpt lat=\"%.14f\" lon=\"%.14f\">\n", ptr[0], ptr[1]);
-                        fprintf(fp_GPX, "      <ele>%.02f</ele>\n", ptr[2]);
-
-                        msec = (in + (i / GPSrate))*1000 + tm_info->tm_sec *1000+ tm_info->tm_min *60*1000 + tm_info->tm_hour*60*60*1000;
-                        sec = (int) (msec / 1000) % 60;
-                        min = (int) ((int) (msec / (1000 * 60)) % 60);
-                        hour = (int) ((int) (msec / (1000 * 60 * 60)) % 24);
-                        double2Ints(msec / 1000, 3, &intpart, &fractpart);
-                        fprintf(fp_GPX, "      <time>%s%02D:%02D:%02D.%03DZ</time>\n", TimeStr, hour, min, sec, fractpart);
-                      fprintf(fp_GPX, "    </trkpt>\n");
-                    }
-                    free(tmpbuffer);
-                }
-            }
-            GPMF_ResetState(ms);
-            fprintf(fp_GPX, "\n");
+            free(values);
         }
-
-        fprintf(fp_GPX, "    </trkseg>\n"
-                "  </trk>\n"
-                "</gpx>\n");
-        
-        fprintf(fp_KML,     
-                    "       </coordinates>\n"
-                    "      </LineString>\n"
-                    "     </MultiGeometry>\n"
-                    "   </Placemark>\n"
-                    " </Document>\n"
-                    "</kml>");
-        
-        fclose(fp_GPX);
-        fclose(fp_KML);
-        if (verbose) printf("%ds written to %s\n", index, f_output_GPX);
+        if (options.verbose && (index % 100 == 0)) fprintf(stderr, "Processed payload %u/%u\n", index + 1, payload_count);
+    }
+    if (points == 0) { fprintf(stderr, "No valid GPS5 points found in '%s'\n", options.input); goto cleanup; }
+    fputs("</trkseg></trk></gpx>\n", gpx);
+    fputs("</coordinates></LineString></Placemark></Document></kml>\n", kml);
+    if (ferror(gpx) || ferror(kml) || !close_outputs(&gpx, &kml)) {
+        fprintf(stderr, "Failed to finish output files\n"); goto cleanup;
+    }
+    struct stat target_stat;
+    if ((stat(gpx_path, &target_stat) == 0 && S_ISDIR(target_stat.st_mode)) ||
+        (stat(kml_path, &target_stat) == 0 && S_ISDIR(target_stat.st_mode))) {
+        fprintf(stderr, "An output target is a directory\n"); goto cleanup;
+    }
+    if (rename(gpx_temp, gpx_path) != 0) { fprintf(stderr, "Cannot publish '%s': %s\n", gpx_path, strerror(errno)); goto cleanup; }
+    gpx_temp[0] = '\0';
+    if (rename(kml_temp, kml_path) != 0) { fprintf(stderr, "Cannot publish '%s': %s\n", kml_path, strerror(errno)); goto cleanup; }
+    kml_temp[0] = '\0';
+    if (options.verbose) fprintf(stderr, "Wrote %llu points to %s and %s\n", (unsigned long long)points, gpx_path, kml_path);
+    result = 0;
 
 cleanup:
-        if (payload) FreeGPMFPayload(payload);
-        payload = NULL;
-        CloseGPMFSource();
-    }
-    
-    if(f_output_KML != NULL) free(f_output_KML);
-    if(f_output_GPX != NULL) free(f_output_GPX);
-    
-    return ret;
+    if (gpx || kml) close_outputs(&gpx, &kml);
+    if (stream.cbhandle) GPMF_Free(&stream);
+    if (payload) FreeGPMFPayload(source, payload);
+    GPMF_SourceDestroy(source);
+    if (gpx_temp && *gpx_temp) unlink(gpx_temp);
+    if (kml_temp && *kml_temp) unlink(kml_temp);
+    free(gpx_path);
+    free(kml_path);
+    free(gpx_temp);
+    free(kml_temp);
+    return result;
 }
